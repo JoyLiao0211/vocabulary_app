@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vocabulary Study App</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body>
+    <div class="container mt-4">
+        <h1>Welcome to the Vocabulary Study App</h1>
+        <p>Logged in with {{ email }}</p>
+        <a href="{{ url_for('logout') }}" class="btn btn-primary mb-4">Log Out</a>
+
+
+        <h2>Start a New Session</h2>
+        <form method="post">
+            <div class="row">
+                <div class="col">
+                    <label for="start" class="form-label">Start (inclusive):</label>
+                    <input type="number" class="form-control" id="start" name="start" value="0" required>
+                </div>
+                <div class="col">
+                    <label for="end" class="form-label">End (non-inclusive):</label>
+                    <input type="number" class="form-control" id="end" name="end" value="{{ progress }}" required>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label for="number" class="form-label">Number of Questions:</label>
+                <input type="number" class="form-control" id="number" name="number" value="15" required>
+            </div>
+            <div class="mb-3">
+                <label for="order" class="form-label">Order:</label>
+                <select class="form-select" id="order" name="order">
+                    <option value="1">Original Order</option>
+                    <option value="2">Least Familiar</option>
+                    <option value="3">Least Familiar & Last Accessed</option>
+                    <option value="4">Random</option>
+                </select>
+            </div>
+            <div class="mb-3">
+                <label for="type" class="form-label">Type of Questions:</label>
+                <select class="form-select" id="type" name="type">
+                    <option value="1">Flashcard</option>
+                    <option value="2">Multiple Choice</option>
+                    <option value="3">Spelling with Hints</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Start</button>
+        </form>
+
+
+        <h2 class = mt-4>Study Progress</h2>
+        <canvas id="progressChart" width="250" height="250"></canvas>
+        <p>proficient: {{stats[0]}}</p>
+        <p>learning: {{stats[1]}}</p>
+        <p>unfamiliar: {{stats[2]}}</p>
+    </div>
+
+    <script>
+        const stats = {{ stats | tojson }};
+        const colors = ["#47B39C", "#FFC154", "#EC6B56"];
+        const canvas = document.getElementById("progressChart");
+        const ctx = canvas.getContext("2d");
+        
+        const total = stats.reduce((a, b) => a + b, 0);
+        let startAngle = -0.5 * Math.PI; // Start at 12 o'clock direction
+
+        stats.forEach((value, index) => {
+            const sliceAngle = (value / total) * 2 * Math.PI;
+
+            // Draw the slice
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, canvas.height / 2);
+            ctx.arc(
+                canvas.width / 2,
+                canvas.height / 2,
+                Math.min(canvas.width / 2, canvas.height / 2),
+                startAngle,
+                startAngle + sliceAngle
+            );
+            ctx.closePath();
+            ctx.fillStyle = colors[index];
+            ctx.fill();
+
+            startAngle += sliceAngle;
+        });
+
+    </script>
+</body>
+
+</html>
