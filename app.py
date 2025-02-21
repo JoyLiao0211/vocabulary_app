@@ -42,7 +42,7 @@ def index():
     if request.method == 'POST':
         session['start'] = int(request.form['start'])
         session['end'] = int(request.form['end'])
-        session['end'] = min(session['end'], 1092)
+        session['end'] = min(session['end'], vocab_num)
         if int(session['end']) > int(session['progress']):
             session['progress'] = session['end']
             update_progress(session['user_id'], session['progress'])
@@ -141,9 +141,6 @@ def study_multiple_choice():
         # Check if the selected answer is correct
         is_correct = choices[user_answer_index - 1] == correct_answer
         session['results'].append(is_correct)
-        # weight:0.2
-        # update_a_word(session['user_id'], question_id, is_correct, 0.2)
-
         # Update session counts
         if is_correct:
             session['correct_count'] = session.get('correct_count', 0) + 1
@@ -152,17 +149,7 @@ def study_multiple_choice():
             if 'wrong_questions' not in session:
                 session['wrong_questions'] = []
             session['wrong_questions'].append(question_id)
-
-        # Feedback and redirection
-        feedback = "Correct!" if is_correct else f"Wrong! The correct answer was: {correct_answer}"
-        return render_template(
-            'multiple_choice.html',
-            feedback=feedback,
-            is_correct=is_correct,
-            redirect=True,
-            term=session.get('current_term'),
-            choices=session.get('current_choices')
-        )
+        return redirect(url_for('study_multiple_choice'))
 
     # Prepare the next question for GET request
     prepare_current_question()
@@ -179,7 +166,8 @@ def study_multiple_choice():
             'multiple_choice.html',
             question_id=question_id,
             term=question['Term'],
-            choices=all_choices
+            choices=all_choices,
+            answer=question['Definition']
         )
     # Redirect to results page if no more questions
     return redirect(url_for('results'))
@@ -223,10 +211,10 @@ def results():
     update_words(session['user_id'], session['questions'], session['results'], weights[session['type']])
     correct_count = session.get('correct_count', 0)
     incorrect_count = session.get('incorrect_count', 0)
-    session.pop('correct_count', None)
-    session.pop('incorrect_count', None)
-    session.pop('questions', None)
-    session.pop('results', None)
+    session['correct_count'] = 0
+    session['incorrect_count'] = 0
+    session['questions'] = []
+    session['results'] = []
     app.logger.debug(f"wrong questions: {session.get('wrong_questions', [])}")
     if session['type'] == 1:
         return redirect(url_for('index'))
@@ -234,9 +222,12 @@ def results():
 
 @app.route('/retry_wrongs', methods=['GET'])
 def retry_wrongs():
+    
     if 'wrong_questions' in session and session['wrong_questions']:
+        app.logger.debug(f"wrong questions: {session['wrong_questions']}")
         session['questions'] = session['wrong_questions']  # Repopulate the questions list
         session['wrong_questions'] = []  # Clear wrong questions to avoid duplication
+        session['current_number'] = 0
         session['current_question'] = None  # Reset current question
         app.logger.debug("Retrying wrong questions")
         # Redirect based on the question type stored in session
@@ -256,7 +247,7 @@ def prepare_session_questions():
     app.logger.debug("Preparing session questions")
     session.pop('wrong_questions', None)
     start = session.get('start', 0)
-    end = session.get('end', 1092)
+    end = session.get('end', vocab_num)
     number = session.get('number', 10)
     number = min(number, end-start)
     order = session.get('order', 1)

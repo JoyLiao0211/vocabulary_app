@@ -9,6 +9,7 @@
     <style>
         .choice-button {
             margin-bottom: 10px;
+            width: 80%; /* Adjust as needed for better layout */
         }
         .choice-button:hover {
             box-shadow: 0 0 5px #007bff; /* Blue glow effect */
@@ -21,37 +22,59 @@
             margin-top: 20px;
             margin-bottom: 20px;
         }
-        
     </style>
 </head>
 <body>
     <div class="container mt-4">
         <h1 class="center-text">Multiple Choice</h1>
-        {% if redirect %}
-        <p id="feedback" class="alert {{ 'alert-success' if is_correct else 'alert-danger' }}">
-            {{ feedback }}
-        </p>
-        {% if is_correct %}
-        <script>
-            // Wait for 0.6 seconds, then redirect to the next question
-            setTimeout(function () {
-                window.location = "{{ url_for('study_multiple_choice') }}";
-            }, 600);
-        </script>
-        {% else %}
-        <button class="btn btn-primary mt-3" onclick="window.location='{{ url_for('study_multiple_choice') }}'">Next Question</button>
-        {% endif %}
-        {% else %}
-        <p class="center-text">id: {{ question_id }}</p>
-        <h3 class="center-text">{{ term }}</h3>
-        <form method="POST" class="d-flex flex-column align-items-center">
+        <div id="question-info" class="center-text">
+            <p>Question ID: {{ question_id }}</p>
+            <h3>{{ term }}</h3>
+        </div>
+        <div id="choices-container" class="d-flex flex-column align-items-center">
             {% for choice in choices %}
-            <button type="submit" class="btn btn-outline-primary choice-button definition-box" name="answer" value="{{ loop.index }}">
+            <button type="button" class="btn btn-outline-primary choice-button" onclick="checkAnswer('{{ choice }}', '{{ answer }}', '{{ loop.index }}')">
                 {{ choice }}
             </button>
             {% endfor %}
-        </form>
-        {% endif %}
+        </div>
+        <div id="feedback-container" class="center-text mt-4" style="display:none;">
+            <p id="feedback" class="alert"></p>
+            <button class="btn btn-primary" onclick="location.reload();">Next Question</button>
+        </div>
     </div>
+
+    <script>
+        function checkAnswer(userChoice, correctAnswer, choiceIndex) {
+            const feedbackElement = document.getElementById('feedback');
+            const feedbackContainer = document.getElementById('feedback-container');
+            const choicesContainer = document.getElementById('choices-container');
+            const isCorrect = (userChoice === correctAnswer);
+
+            if (isCorrect) {
+                feedbackElement.textContent = 'Correct! Fetching next question...';
+                feedbackElement.className = 'alert alert-success';
+                setTimeout(function() {
+                    sendAnswer(choiceIndex);
+                }, 1000);
+            } else {
+                feedbackElement.textContent = `Incorrect! The correct answer was: ${correctAnswer}`;
+                feedbackElement.className = 'alert alert-danger';
+                feedbackContainer.style.display = 'block';
+                choicesContainer.style.display = 'none';  // Optionally hide choices on incorrect
+            }
+        }
+
+        function sendAnswer(choiceIndex) {
+            const formData = new FormData();
+            formData.append('answer', choiceIndex);
+            fetch('{{ url_for("study_multiple_choice") }}', {
+                method: 'POST',
+                body: formData
+            }).then(() => {
+                window.location.reload();
+            });
+        }
+    </script>
 </body>
 </html>
