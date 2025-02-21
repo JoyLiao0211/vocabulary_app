@@ -31,49 +31,35 @@
             <p>Question ID: {{ question_id }}</p>
             <h3>{{ term }}</h3>
         </div>
-        <div id="choices-container" class="d-flex flex-column align-items-center">
-            {% for choice in choices %}
-            <button type="button" class="btn btn-outline-primary choice-button" onclick="checkAnswer('{{ choice }}', '{{ answer }}', '{{ loop.index }}')">
-                {{ choice }}
-            </button>
-            {% endfor %}
+        
+        <form method="POST" action="{{ url_for('study_multiple_choice') }}">
+            <div id="choices-container" class="d-flex flex-column align-items-center">
+                {% for choice in choices %}
+                <button type="submit" name="answer" value="{{ loop.index0 }}" class="btn btn-outline-primary choice-button">
+                    {{ choice }}
+                </button>
+                {% endfor %}
+            </div>
+        </form>
+        {% if feedback %}
+        <div id="feedback-container" class="center-text mt-4">
+            <p id="feedback" class="alert" style="color: {{ 'green' if is_correct else 'red' }}">
+                {{ feedback }}
+            </p>
+            {% if not is_correct %}
+            <button class="btn btn-primary" onclick="window.location.href='{{ url_for('study_multiple_choice') }}';">Next Question</button>
+            {% endif %}
         </div>
-        <div id="feedback-container" class="center-text mt-4" style="display:none;">
-            <p id="feedback" class="alert"></p>
-            <button class="btn btn-primary" onclick="location.reload();">Next Question</button>
-        </div>
+        {% endif %}
+        
+
     </div>
 
     <script>
-        function checkAnswer(userChoice, correctAnswer, choiceIndex) {
-            const feedbackElement = document.getElementById('feedback');
-            const feedbackContainer = document.getElementById('feedback-container');
-            const choicesContainer = document.getElementById('choices-container');
-            const isCorrect = (userChoice === correctAnswer);
-
-            if (isCorrect) {
-                feedbackElement.textContent = 'Correct! Fetching next question...';
-                feedbackElement.className = 'alert alert-success';
-                setTimeout(function() {
-                    sendAnswer(choiceIndex);
-                }, 1000);
-            } else {
-                feedbackElement.textContent = `Incorrect! The correct answer was: ${correctAnswer}`;
-                feedbackElement.className = 'alert alert-danger';
-                feedbackContainer.style.display = 'block';
-                choicesContainer.style.display = 'none';  // Optionally hide choices on incorrect
-            }
-        }
-
-        function sendAnswer(choiceIndex) {
-            const formData = new FormData();
-            formData.append('answer', choiceIndex);
-            fetch('{{ url_for("study_multiple_choice") }}', {
-                method: 'POST',
-                body: formData
-            }).then(() => {
-                window.location.reload();
-            });
+        if ({{ redirect|tojson }}) {
+            setTimeout(function() {
+                window.location.href = "{{ url_for('study_multiple_choice') }}";
+            }, 1000);
         }
     </script>
 </body>

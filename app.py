@@ -7,7 +7,7 @@ import json
 from datetime import timedelta
 
 app = Flask(__name__)
-app.secret_key = '1jhbkc132i4yo'  # Needed for session management
+app.secret_key = '1jhbkc132i4yo'  # just a random string
 app.permanent_session_lifetime = timedelta(days=30)
 
 oauth = OAuth(app)
@@ -31,9 +31,9 @@ google = oauth.register(
 contents = pd.read_csv('static/contents_original.csv')
 
 weights = dict({
-    1:0,
-    2:0.2,
-    3:0.2
+    1:0, # flashcard
+    2:0.2, # multiple choice
+    3:0.2 # spelling
 })
 
 
@@ -139,17 +139,34 @@ def study_multiple_choice():
         correct_answer = session.get('correct_answer')
 
         # Check if the selected answer is correct
-        is_correct = choices[user_answer_index - 1] == correct_answer
+        is_correct = choices[user_answer_index] == correct_answer
         session['results'].append(is_correct)
         # Update session counts
         if is_correct:
             session['correct_count'] = session.get('correct_count', 0) + 1
+            return render_template(
+                'multiple_choice.html',
+                question_id=question_id,
+                term=session['current_term'],
+                choices=session['current_choices'],
+                feedback="Correct!",
+                is_correct=True,
+                redirect=True
+            )
         else:
             session['incorrect_count'] = session.get('incorrect_count', 0) + 1
             if 'wrong_questions' not in session:
                 session['wrong_questions'] = []
             session['wrong_questions'].append(question_id)
-        return redirect(url_for('study_multiple_choice'))
+            return render_template(
+                'multiple_choice.html',
+                question_id=question_id,
+                term=session['current_term'],
+                choices=session['current_choices'],
+                feedback=f"Wrong! The correct answer was: {correct_answer}",
+                is_correct=False,
+                redirect=False
+            )
 
     # Prepare the next question for GET request
     prepare_current_question()
@@ -167,7 +184,7 @@ def study_multiple_choice():
             question_id=question_id,
             term=question['Term'],
             choices=all_choices,
-            answer=question['Definition']
+            redirect=False
         )
     # Redirect to results page if no more questions
     return redirect(url_for('results'))
@@ -241,7 +258,6 @@ def retry_wrongs():
     else:
         # If no wrong questions, redirect to the results page
         return redirect(url_for('index'))
-
 
 def prepare_session_questions():
     app.logger.debug("Preparing session questions")
