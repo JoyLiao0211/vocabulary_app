@@ -11,8 +11,6 @@
 <body>
     <div class="container mt-4">
         <h1>Welcome to the Vocabulary Study App</h1>
-        <p>Logged in with {{ email }}</p>
-        <a href="{{ url_for('logout') }}" class="btn btn-primary mb-4">Log Out</a>
 
 
         <h2>Start a New Session</h2>
@@ -52,42 +50,9 @@
         </form>
 
 
-        <h2 class = mt-4>Study Progress</h2>
-        <canvas id="progressChart" width="250" height="250"></canvas>
-        <p>proficient: {{stats[0]}}</p>
-        <p>learning: {{stats[1]}}</p>
-        <p>unfamiliar: {{stats[2]}}</p>
     </div>
 
     <script>
-        const stats = {{ stats | tojson }};
-        const colors = ["#47B39C", "#FFC154", "#EC6B56"];
-        const canvas = document.getElementById("progressChart");
-        const ctx = canvas.getContext("2d");
-        
-        const total = stats.reduce((a, b) => a + b, 0);
-        let startAngle = -0.5 * Math.PI; // Start at 12 o'clock direction
-
-        stats.forEach((value, index) => {
-            const sliceAngle = (value / total) * 2 * Math.PI;
-
-            // Draw the slice
-            ctx.beginPath();
-            ctx.moveTo(canvas.width / 2, canvas.height / 2);
-            ctx.arc(
-                canvas.width / 2,
-                canvas.height / 2,
-                Math.min(canvas.width / 2, canvas.height / 2),
-                startAngle,
-                startAngle + sliceAngle
-            );
-            ctx.closePath();
-            ctx.fillStyle = colors[index];
-            ctx.fill();
-
-            startAngle += sliceAngle;
-        });
-
     </script>
 </body>
 

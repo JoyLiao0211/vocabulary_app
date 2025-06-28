@@ -1,294 +1,232 @@
+import csv
+from datetime import date, timedelta
 from flask import Flask, render_template, request, redirect, url_for, session
-from authlib.integrations.flask_client import OAuth
-import pandas as pd
 import random
-from google_sheets_functions import *
-import json
-from datetime import timedelta
 
+# -- Local CSV "database" as list of dicts ------------------------------
+DATA_FILE = 'data.csv'
+
+# Data loaded as list of dicts
+# Each dict: {"ID": int, "Term": str, "Definitions": [str], "Scores": [float], "AccessTime": [date_str]}
+data = []
+
+
+def load_data():
+    global data
+    data = []
+    with open(DATA_FILE, newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            defs = row['NewDefinition'].splitlines()
+            scores = [float(s) for s in row['Scores'].splitlines()]
+            times  = row['AccessTime'].splitlines()
+            data.append({
+                'ID': int(row['ID']),
+                'Term': row['Term'],
+                'Definitions': defs,
+                'Scores': scores,
+                'AccessTime': times
+            })
+
+
+def save_data():
+    # write back to CSV in same multi-line format
+    with open(DATA_FILE, 'w', newline='', encoding='utf-8') as f:
+        fieldnames = ['ID','Term','NewDefinition','Scores','AccessTime']
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for item in data:
+            writer.writerow({
+                'ID': item['ID'],
+                'Term': item['Term'],
+                'NewDefinition': '\n'.join(item['Definitions']),
+                'Scores': '\n'.join(str(s) for s in item['Scores']),
+                'AccessTime': '\n'.join(item['AccessTime'])
+            })
+
+# initialize on startup
+load_data()
+
+# helpers
+
+def vocab_count():
+    return len(data)
+
+def avg(lst):
+    return sum(lst) / len(lst) if lst else 0
+
+def get_least_familiar_questions(start, end, number):
+    # compute average scores per ID
+    subset = [item for item in data if start <= item['ID'] < end]
+    subset.sort(key=lambda x: avg(x['Scores']))
+    return [item['ID'] for item in subset[:number]]
+
+
+def get_least_familiar_and_last_accessed_questions(start, end, number):
+    today = date.today().isoformat()
+    def metric(item):
+        # avg score minus 0.05 * avg days since
+        scores = item['Scores']
+        dates = [date.fromisoformat(d) for d in item['AccessTime']]
+        avg_score = sum(scores)/len(scores)
+        days = [(date.today() - d).days for d in dates]
+        avg_days = sum(days)/len(days)
+        return avg_score - 0.05 * avg_days
+    subset = [item for item in data if start <= item['ID'] < end]
+    subset.sort(key=metric)
+    return [item['ID'] for item in subset[:number]]
+
+
+def update_words(word_ids, correct_list, weight):
+    today = date.today().isoformat()
+    for wid, is_corr in zip(word_ids, correct_list):
+        item = next((i for i in data if i['ID']==wid), None)
+        if not item:
+            continue
+        # update each definition entry
+        item['AccessTime'] = [today] * len(item['AccessTime'])
+        if weight > 0:
+            item['Scores'] = [s*(1-weight) + (1 if is_corr else 0)*weight for s in item['Scores']]
+    save_data()
+
+# -- Flask App -----------------------------------------------------------
 app = Flask(__name__)
-app.secret_key = '1jhbkc132i4yo'  # just a random string
+app.secret_key = 'replace_with_a_random_string'
 app.permanent_session_lifetime = timedelta(days=30)
 
-oauth = OAuth(app)
-with open('oath_client_id.json', 'r') as file:
-    google_credentials = json.load(file)['web']  # 'web' key contains OAuth 2.0 details
-
-google = oauth.register(
-    name='google',
-    client_id=google_credentials['client_id'],
-    client_secret=google_credentials['client_secret'],
-    access_token_url=google_credentials['token_uri'],
-    access_token_params=None,
-    authorize_url=google_credentials['auth_uri'],
-    authorize_params=None,
-    api_base_url='https://www.googleapis.com/oauth2/v1/',
-    userinfo_endpoint='https://openidconnect.googleapis.com/v1/userinfo',
-    client_kwargs={'scope': 'email'},
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration'
-)
-
-contents = pd.read_csv('static/contents_original.csv')
-
-weights = dict({
-    1:0, # flashcard
-    2:0.2, # multiple choice
-    3:0.2 # spelling
-})
-
+# Study mode weights
+db_weights = {1: 0, 2: 0.2, 3: 0.2}
+vocab_num = vocab_count()
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
+        session.permanent = True
         session['start'] = int(request.form['start'])
-        session['end'] = int(request.form['end'])
-        session['end'] = min(session['end'], vocab_num)
-        if int(session['end']) > int(session['progress']):
+        session['end']   = min(int(request.form['end']), vocab_num)
+        if session['end'] > session.get('progress', 0):
             session['progress'] = session['end']
-            update_progress(session['user_id'], session['progress'])
         session['number'] = int(request.form['number'])
-        session['order'] = int(request.form['order'])
-        session['type'] = int(request.form['type'])
-        app.logger.debug(f"Session data: {session}")
+        session['order']  = int(request.form['order'])
+        session['type']   = int(request.form['type'])
         return redirect(url_for('redirect_to_question'))
-    if 'user_email' not in session:
-        return redirect(url_for('login'))
-    if 'user_id' not in session:
-        session['user_id'] = find_user_id_by_email(session['user_email'])
-    if 'progress' not in session:
-        session['progress'] = int(get_progress_by_user_id(session['user_id']))
-    stats = get_stats_by_user_id(session['user_id'])
-    return render_template(
-        'index.html',
-        progress=session['progress'],
-        email=session['user_email'],
-        stats=stats
-    )
-
-@app.route('/login')
-def login():
-    redirect_uri = url_for('authorize', _external=True)
-    return google.authorize_redirect(redirect_uri)
-
-@app.route('/authorize')
-def authorize():
-    token = google.authorize_access_token()
-    resp = google.get('userinfo')
-    user_info = resp.json()
-    app.logger.debug(user_info)
-    user_email = user_info['email']
-    user_login(user_email)
-    app.logger.debug(f"User {user_email} logged in")
-    return redirect(url_for('index'))
-
-def user_login(user_email):
-    session.permanent = True
-    session['user_email'] = user_email
-    user_id = find_user_id_by_email(user_email)
-    if user_id == None:
-        user_id = create_new_user(user_email)
-    session['user_id'] = user_id
-    session['progress'] = get_progress_by_user_id(user_id)
-def user_logout():
-    session.permanent = False
-    session.pop('user_email', None)
-    session.pop('user_id',None)
-    session.pop('progress', None)
-
-@app.route('/logout')
-def logout():
-    user_logout()
-    return redirect(url_for('index'))
+    progress = session.get('progress', 0)
+    return render_template('index.html', progress=progress)
 
 @app.route('/redirect_to_question')
 def redirect_to_question():
-    prepare_session_questions()
-    if session['type'] == 1:
+    _prepare_session_questions()
+    t = session['type']
+    if t == 1:
         return redirect(url_for('study_flashcard'))
-    elif session['type'] == 2:
+    if t == 2:
         return redirect(url_for('study_multiple_choice'))
-    elif session['type'] == 3:
+    if t == 3:
         return redirect(url_for('study_spelling'))
-    else:
-        return "Invalid question type", 404
+    return "Invalid type", 404
 
 @app.route('/study/flashcard')
 def study_flashcard():
-    app.logger.debug("study_flashcard")
-    prepare_current_question()
-    question_id = session.get('current_question', None)
-    if question_id is not None:
-        app.logger.debug(f"line 102, Current question: {question_id}")
-        question = contents.loc[question_id]
-        return render_template(
-            'flashcard.html',
-            question_id=question_id,
-            term=question['Term'],
-            definition=question['Definition']
-        )
-    session['results'] = [True]*len(session['questions'])
-    return redirect(url_for('results'))
+    _prepare_current_question()
+    qid = session.get('current_question')
+    if qid is None:
+        session['results'] = [True]*len(session['questions'])
+        return redirect(url_for('results'))
+    item = next(i for i in data if i['ID']==qid)
+    # show first definition
+    return render_template('flashcard.html', term=item['Term'], definition=" / ".join(item['Definitions']))
 
 @app.route('/study/multiple_choice', methods=['GET', 'POST'])
 def study_multiple_choice():
     if request.method == 'POST':
-        # Process the submitted answer
-        question_id = session.get('current_question', None)
-        user_answer_index = int(request.form.get('answer'))
-        choices = session.get('current_choices', [])
-        correct_answer = session.get('correct_answer')
-
-        # Check if the selected answer is correct
-        is_correct = choices[user_answer_index] == correct_answer
-        session['results'].append(is_correct)
-        # Update session counts
-        if is_correct:
-            session['correct_count'] = session.get('correct_count', 0) + 1
-            return render_template(
-                'multiple_choice.html',
-                question_id=question_id,
-                term=session['current_term'],
-                choices=session['current_choices'],
-                feedback="Correct!",
-                is_correct=True,
-                redirect=True
-            )
-        else:
-            session['incorrect_count'] = session.get('incorrect_count', 0) + 1
-            if 'wrong_questions' not in session:
-                session['wrong_questions'] = []
-            session['wrong_questions'].append(question_id)
-            return render_template(
-                'multiple_choice.html',
-                question_id=question_id,
-                term=session['current_term'],
-                choices=session['current_choices'],
-                feedback=f"Wrong! The correct answer was: {correct_answer}",
-                is_correct=False,
-                redirect=False
-            )
-
-    # Prepare the next question for GET request
-    prepare_current_question()
-    question_id = session.get('current_question', None)
-    if question_id is not None:
-        question = contents.loc[question_id]
-        all_choices_id = random.sample(list(range(0, question_id))+list(range(question_id+1, vocab_num)), 3) + [question_id]
-        random.shuffle(all_choices_id)
-        all_choices = [contents.loc[choice, "Definition"] for choice in all_choices_id]
-        session['current_choices'] = all_choices  # Store choices for answer validation
-        session['correct_answer'] = question['Definition']
-        session['current_term'] = question['Term']
-        return render_template(
-            'multiple_choice.html',
-            question_id=question_id,
-            term=question['Term'],
-            choices=all_choices,
-            redirect=False
-        )
-    # Redirect to results page if no more questions
-    return redirect(url_for('results'))
+        qid = session['current_question']
+        user_idx = int(request.form['answer'])
+        choices = session['current_choices']
+        correct = session['correct_answer']
+        is_corr = (choices[user_idx] == correct)
+        session.setdefault('results', []).append(is_corr)
+        feedback = "Correct!" if is_corr else f"Wrong! The correct answer was: {correct}"
+        return render_template('multiple_choice.html', term=session['current_term'],
+                               choices=choices, feedback=feedback)
+    _prepare_current_question()
+    qid = session.get('current_question')
+    if qid is None:
+        return redirect(url_for('results'))
+    item = next(i for i in data if i['ID']==qid)
+    # take Term as correct, show Definitions
+    term = item['Term']
+    definition = item['Definitions'][0]
+    others = [i['ID'] for i in data if i['ID']!=qid]
+    distract = random.sample(others, 3)
+    ids = distract + [qid]
+    random.shuffle(ids)
+    choices = [next(i['Term'] for i in data if i['ID']==x) for x in ids]
+    session['current_choices'] = choices
+    session['correct_answer']   = term
+    session['current_term']     = definition
+    return render_template('multiple_choice.html', term=definition, choices=choices)
 
 @app.route('/study/spelling', methods=['GET', 'POST'])
 def study_spelling():
-    app.logger.debug("study_spelling")
     if request.method == 'POST':
-        # Process the submitted answer
-        question_id = session.get('current_question', None)
-        user_answer = request.form.get('answer')
-        correct_answer = session.get('correct_answer')
+        answer = request.form['answer'].strip().lower()
+        correct = session['correct_answer'].lower()
+        is_corr = (answer == correct)
+        session.setdefault('results', []).append(is_corr)
+        feedback = "Correct!" if is_corr else f"Wrong! The correct answer was: {session['correct_answer']}"
+        return render_template('spelling.html', feedback=feedback)
+    _prepare_current_question()
+    qid = session.get('current_question')
+    if qid is None:
+        return redirect(url_for('results'))
+    item = next(i for i in data if i['ID']==qid)
+    session['correct_answer'] = item['Term']
+    return render_template('spelling.html', definition=item['Definitions'][0])
 
-        # Check if the selected answer is correct
-        is_correct = user_answer.lower() == correct_answer.lower()
-        # update_a_word(session['user_id'], question_id, is_correct, 0.2)
-        session['results'].append(is_correct)
-
-        # Update session counts
-        if is_correct:
-            session['correct_count'] = session.get('correct_count', 0) + 1
-        else:
-            session['incorrect_count'] = session.get('incorrect_count', 0) + 1
-            if 'wrong_questions' not in session:
-                session['wrong_questions'] = []
-            session['wrong_questions'].append(question_id)
-
-        # Feedback and redirection
-        feedback = "Correct!" if is_correct else f"Wrong! The correct answer was: {correct_answer}"
-        return render_template('spelling.html', feedback=feedback, is_correct=is_correct, redirect=True)
-    prepare_current_question()
-    question_id = session.get('current_question', None)
-    if question_id != None:
-        question = contents.loc[question_id]
-        session['correct_answer'] = question['Term']
-        return render_template('spelling.html', definition=question['Definition'])
-    return redirect(url_for('results'))
-
-@app.route('/results', methods=['GET'])
+@app.route('/results')
 def results():
-    update_words(session['user_id'], session['questions'], session['results'], weights[session['type']])
-    correct_count = session.get('correct_count', 0)
-    incorrect_count = session.get('incorrect_count', 0)
-    session['correct_count'] = 0
-    session['incorrect_count'] = 0
-    session['questions'] = []
-    session['results'] = []
-    app.logger.debug(f"wrong questions: {session.get('wrong_questions', [])}")
-    if session['type'] == 1:
-        return redirect(url_for('index'))
-    return render_template('results.html', correct_count=correct_count, incorrect_count=incorrect_count)
+    update_words(session.get('questions', []), session.get('results', []), db_weights[session['type']])
+    correct = sum(session.get('results', []))
+    incorrect = len(session.get('results', [])) - correct
+    for k in ['questions','results','current_number','current_question']:
+        session.pop(k, None)
+    return render_template('results.html', correct_count=correct, incorrect_count=incorrect)
 
-@app.route('/retry_wrongs', methods=['GET'])
+@app.route('/retry_wrongs')
 def retry_wrongs():
-    
-    if 'wrong_questions' in session and session['wrong_questions']:
-        app.logger.debug(f"wrong questions: {session['wrong_questions']}")
-        session['questions'] = session['wrong_questions']  # Repopulate the questions list
-        session['wrong_questions'] = []  # Clear wrong questions to avoid duplication
-        session['current_number'] = 0
-        session['current_question'] = None  # Reset current question
-        app.logger.debug("Retrying wrong questions")
-        # Redirect based on the question type stored in session
-        question_type = session.get('type', 1)
-        if question_type == 1:
-            return redirect(url_for('study_flashcard'))
-        elif question_type == 2:
-            return redirect(url_for('study_multiple_choice'))
-        elif question_type == 3:
-            return redirect(url_for('study_spelling'))
-    else:
-        # If no wrong questions, redirect to the results page
+    wrongs = session.get('wrong_questions', [])
+    if not wrongs:
         return redirect(url_for('index'))
-
-def prepare_session_questions():
-    app.logger.debug("Preparing session questions")
+    session['questions'] = wrongs
     session.pop('wrong_questions', None)
-    start = session.get('start', 0)
-    end = session.get('end', vocab_num)
-    number = session.get('number', 10)
-    number = min(number, end-start)
-    order = session.get('order', 1)
-    if order == 1: # original order
-        questions = list(range(start, start+number))
-    elif order == 2: # sort by score, lowest first
-        questions = get_least_familiar_questions(session['user_id'], start, end, number)
-    elif order == 3: # sort by score and last time accessed
-        questions = get_least_familiar_and_last_accessed_questions(session['user_id'], start, end, number)
-    elif order == 4: # random order
-        questions = random.sample(range(start, end), number)
-    app.logger.debug(f"number of questions:{len(questions)}")
-    session['questions'] = questions
     session['current_number'] = 0
-    session['results'] = []
+    return redirect(url_for({1:'study_flashcard',2:'study_multiple_choice',3:'study_spelling'}[session['type']]))
+
+# -- Session helpers -----------------------------------------------------
+def _prepare_session_questions():
+    session.pop('wrong_questions', None)
+    start  = session['start']
+    end    = session['end']
+    num    = min(session['number'], end-start)
+    order  = session['order']
+    if order == 1:
+        qs = list(range(start, start+num))
+    elif order == 2:
+        qs = get_least_familiar_questions(start, end, num)
+    else:
+        qs = get_least_familiar_and_last_accessed_questions(start, end, num)
+    session['questions']       = qs
+    session['current_number']  = 0
+    session['results']         = []
     session['current_question'] = None
 
-def prepare_current_question():
-    current_number = session.get('current_number', 0)
-    questions = session.get('questions', [])
-    if current_number < len(questions):
-        current_question = questions[current_number]
-        session['current_question'] = current_question
-        current_number += 1
-        session['current_number'] = current_number
+
+def _prepare_current_question():
+    idx = session.get('current_number', 0)
+    qs  = session.get('questions', [])
+    if idx < len(qs):
+        session['current_question'] = qs[idx]
+        session['current_number'] = idx+1
     else:
         session['current_question'] = None
 
