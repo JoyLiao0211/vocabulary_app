@@ -97,6 +97,40 @@
         </div>
         {% endif %}
     </div>
+
+    <script>
+        const choiceMap = {
+            a: 0,
+            s: 1,
+            d: 2,
+            f: 3,
+        };
+
+        document.addEventListener('keydown', function (event) {
+            const key = event.key.toLowerCase();
+            const nextButton = document.querySelector('#feedback-container button');
+
+            if (event.target && ['INPUT', 'TEXTAREA'].includes(event.target.tagName)) {
+                return;
+            }
+
+            if (key === ' ' && nextButton) {
+                event.preventDefault();
+                nextButton.click();
+                return;
+            }
+
+            if (Object.hasOwn(choiceMap, key)) {
+                const choiceIndex = choiceMap[key];
+                const choiceButton = document.querySelectorAll('button[name="answer"]')[choiceIndex];
+
+                if (choiceButton && !choiceButton.disabled) {
+                    event.preventDefault();
+                    choiceButton.click();
+                }
+            }
+        });
+    </script>
 </body>
 </html>
 ```
