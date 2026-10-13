@@ -1,10 +1,12 @@
+"""Data models for vocabulary entries and study progress."""
+
 from dataclasses import dataclass
 from datetime import date, datetime
 
 
 @dataclass(frozen=True, slots=True)
 class VocabularyEntry:
-    """A vocabulary item consisting of one term and one definition."""
+    """Represent one term-definition pair with a unique ID."""
 
     id: int
     term: str
@@ -13,7 +15,7 @@ class VocabularyEntry:
 
 @dataclass(slots=True)
 class LearningProgress:
-    """The current learning state of one vocabulary definition."""
+    """Represent the current learning state of one vocabulary entry."""
 
     entry_id: int
     score: float = 0.0
@@ -22,7 +24,7 @@ class LearningProgress:
 
 @dataclass(frozen=True, slots=True)
 class StudyAttempt:
-    """An immutable record of one answer submitted by the learner."""
+    """Represent an immutable record of a submitted answer."""
 
     id: int
     entry_id: int
