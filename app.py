@@ -174,6 +174,11 @@ def _record_answer(
         if entry_id not in wrong_questions:
             wrong_questions.append(entry_id)
 
+    session["last_question_id"] = entry_id
+    session["last_question_choices"] = session.get("current_choices")
+    session["last_question_correct_answer"] = session.get("correct_answer")
+    session["last_question_term"] = session.get("current_term")
+
     session["current_number"] = session.get("current_number", 0) + 1
     session.pop("current_question", None)
     session.pop("current_choices", None)
@@ -263,6 +268,26 @@ def study_multiple_choice():
 
         return redirect(url_for("study_multiple_choice"))
 
+    feedback = session.pop("last_feedback", None)
+    previous_question_id = session.pop("last_question_id", None)
+    previous_choices = session.pop("last_question_choices", None)
+    previous_correct_answer = session.pop("last_question_correct_answer", None)
+    previous_term = session.pop("last_question_term", None)
+
+    if feedback is not None and previous_question_id is not None:
+        previous_entry = get_entry(previous_question_id)
+
+        if previous_entry is not None:
+            return render_template(
+                "multiple_choice.html",
+                question_id=previous_entry.id,
+                term=previous_term or previous_entry.definition,
+                choices=previous_choices or [previous_entry.term],
+                feedback=feedback,
+                is_correct=feedback == "Correct!",
+                correct_answer=previous_correct_answer or previous_entry.term,
+            )
+
     entry = _get_current_entry()
 
     if entry is None:
@@ -276,8 +301,7 @@ def study_multiple_choice():
     session["correct_answer"] = entry.term
     session["current_term"] = entry.definition
 
-    feedback = session.pop("last_feedback", None)
-    is_correct = feedback == "Correct!"
+    is_correct = feedback == "Correct!" if feedback is not None else False
 
     return render_template(
         "multiple_choice.html",
@@ -311,6 +335,23 @@ def study_spelling():
 
         return redirect(url_for("study_spelling"))
 
+    feedback = session.pop("last_feedback", None)
+    previous_question_id = session.pop("last_question_id", None)
+    previous_correct_answer = session.pop("last_question_correct_answer", None)
+    previous_term = session.pop("last_question_term", None)
+
+    if feedback is not None and previous_question_id is not None:
+        previous_entry = get_entry(previous_question_id)
+
+        if previous_entry is not None:
+            return render_template(
+                "spelling.html",
+                definition=previous_term or previous_entry.definition,
+                feedback=feedback,
+                redirect=True,
+                is_correct=feedback == "Correct!",
+            )
+
     entry = _get_current_entry()
 
     if entry is None:
@@ -318,8 +359,7 @@ def study_spelling():
 
     session["correct_answer"] = entry.term
 
-    feedback = session.pop("last_feedback", None)
-    is_correct = feedback == "Correct!"
+    is_correct = feedback == "Correct!" if feedback is not None else False
 
     return render_template(
         "spelling.html",
