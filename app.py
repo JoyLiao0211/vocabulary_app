@@ -1,296 +1,396 @@
-from flask import Flask, render_template, request, redirect, url_for, session
-from authlib.integrations.flask_client import OAuth
-import pandas as pd
+"""Flask application for vocabulary study."""
+
 import random
-from google_sheets_functions import *
-import json
 from datetime import timedelta
 
-app = Flask(__name__)
-app.secret_key = '1jhbkc132i4yo'  # just a random string
-app.permanent_session_lifetime = timedelta(days=30)
+from flask import Flask, redirect, render_template, request, session, url_for
 
-oauth = OAuth(app)
-with open('oath_client_id.json', 'r') as file:
-    google_credentials = json.load(file)['web']  # 'web' key contains OAuth 2.0 details
-
-google = oauth.register(
-    name='google',
-    client_id=google_credentials['client_id'],
-    client_secret=google_credentials['client_secret'],
-    access_token_url=google_credentials['token_uri'],
-    access_token_params=None,
-    authorize_url=google_credentials['auth_uri'],
-    authorize_params=None,
-    api_base_url='https://www.googleapis.com/oauth2/v1/',
-    userinfo_endpoint='https://openidconnect.googleapis.com/v1/userinfo',
-    client_kwargs={'scope': 'email'},
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration'
+from database import (
+    get_entry,
+    get_entry_count,
+    get_entries_in_range,
+    get_least_familiar_and_last_accessed_questions,
+    get_least_familiar_questions,
+    get_random_distractor_terms,
+    init_db,
+    record_attempt,
 )
 
-contents = pd.read_csv('static/contents_original.csv')
+app = Flask(__name__)
+app.secret_key = "replace_with_a_random_string"
+app.permanent_session_lifetime = timedelta(days=30)
 
-weights = dict({
-    1:0, # flashcard
-    2:0.2, # multiple choice
-    3:0.2 # spelling
-})
+# Study modes: 1 = flashcard, 2 = multiple choice, 3 = spelling.
+DB_WEIGHTS = {
+    1: 0.0,
+    2: 0.2,
+    3: 0.2,
+}
+
+STUDY_ROUTES = {
+    1: "study_flashcard",
+    2: "study_multiple_choice",
+    3: "study_spelling",
+}
+
+STUDY_MODE_NAMES = {
+    1: "flashcard",
+    2: "multiple_choice",
+    3: "spelling",
+}
+
+init_db()
 
 
-@app.route('/', methods=['GET', 'POST'])
+@app.route("/", methods=["GET", "POST"])
 def index():
-    if request.method == 'POST':
-        session['start'] = int(request.form['start'])
-        session['end'] = int(request.form['end'])
-        session['end'] = min(session['end'], vocab_num)
-        if int(session['end']) > int(session['progress']):
-            session['progress'] = session['end']
-            update_progress(session['user_id'], session['progress'])
-        session['number'] = int(request.form['number'])
-        session['order'] = int(request.form['order'])
-        session['type'] = int(request.form['type'])
-        app.logger.debug(f"Session data: {session}")
-        return redirect(url_for('redirect_to_question'))
-    if 'user_email' not in session:
-        return redirect(url_for('login'))
-    if 'user_id' not in session:
-        session['user_id'] = find_user_id_by_email(session['user_email'])
-    if 'progress' not in session:
-        session['progress'] = int(get_progress_by_user_id(session['user_id']))
-    stats = get_stats_by_user_id(session['user_id'])
+    """Display study settings and initialize a new study session."""
+    if request.method == "POST":
+        try:
+            start = int(request.form["start"])
+            end = int(request.form["end"])
+            number = int(request.form["number"])
+            order = int(request.form["order"])
+            study_type = int(request.form["type"])
+        except (KeyError, ValueError):
+            return "Invalid study settings", 400
+
+        vocab_num = get_entry_count()
+
+        start = max(0, min(start, vocab_num))
+        end = max(0, min(end, vocab_num))
+
+        if start >= end:
+            return "The end must be greater than the start", 400
+
+        if number <= 0:
+            return "The number of questions must be positive", 400
+
+        if order not in (1, 2, 3):
+            return "Invalid question order", 400
+
+        if study_type not in STUDY_ROUTES:
+            return "Invalid study type", 400
+
+        session.permanent = True
+        session["start"] = start
+        session["end"] = end
+        session["number"] = number
+        session["order"] = order
+        session["type"] = study_type
+        session["progress"] = max(
+            session.get("progress", 0),
+            end,
+        )
+
+        return redirect(url_for("redirect_to_question"))
+
     return render_template(
-        'index.html',
-        progress=session['progress'],
-        email=session['user_email'],
-        stats=stats
+        "index.html",
+        progress=session.get("progress", 0),
     )
 
-@app.route('/login')
-def login():
-    redirect_uri = url_for('authorize', _external=True)
-    return google.authorize_redirect(redirect_uri)
 
-@app.route('/authorize')
-def authorize():
-    token = google.authorize_access_token()
-    resp = google.get('userinfo')
-    user_info = resp.json()
-    app.logger.debug(user_info)
-    user_email = user_info['email']
-    user_login(user_email)
-    app.logger.debug(f"User {user_email} logged in")
-    return redirect(url_for('index'))
-
-def user_login(user_email):
-    session.permanent = True
-    session['user_email'] = user_email
-    user_id = find_user_id_by_email(user_email)
-    if user_id == None:
-        user_id = create_new_user(user_email)
-    session['user_id'] = user_id
-    session['progress'] = get_progress_by_user_id(user_id)
-def user_logout():
-    session.permanent = False
-    session.pop('user_email', None)
-    session.pop('user_id',None)
-    session.pop('progress', None)
-
-@app.route('/logout')
-def logout():
-    user_logout()
-    return redirect(url_for('index'))
-
-@app.route('/redirect_to_question')
+@app.route("/redirect_to_question")
 def redirect_to_question():
-    prepare_session_questions()
-    if session['type'] == 1:
-        return redirect(url_for('study_flashcard'))
-    elif session['type'] == 2:
-        return redirect(url_for('study_multiple_choice'))
-    elif session['type'] == 3:
-        return redirect(url_for('study_spelling'))
-    else:
-        return "Invalid question type", 404
+    """Select questions and redirect to the chosen study mode."""
+    if "type" not in session:
+        return redirect(url_for("index"))
 
-@app.route('/study/flashcard')
+    _prepare_session_questions()
+
+    return redirect(url_for(STUDY_ROUTES[session["type"]]))
+
+
+def _prepare_session_questions() -> None:
+    """Select a new set of questions using the configured ordering strategy."""
+    start = session["start"]
+    end = session["end"]
+    number = session["number"]
+    order = session["order"]
+
+    available_ids = get_entries_in_range(start, end)
+    number = min(number, len(available_ids))
+
+    if order == 1:
+        questions = available_ids[:number]
+    elif order == 2:
+        questions = get_least_familiar_questions(
+            start,
+            end,
+            number,
+        )
+    else:
+        questions = get_least_familiar_and_last_accessed_questions(
+            start,
+            end,
+            number,
+        )
+
+    session["questions"] = questions
+    session["current_number"] = 0
+    session["results"] = []
+    session["wrong_questions"] = []
+    session.pop("current_question", None)
+    session.pop("current_choices", None)
+    session.pop("correct_answer", None)
+    session.pop("current_term", None)
+    session.pop("last_feedback", None)
+
+
+def _prepare_current_question() -> int | None:
+    """Return the current question ID without advancing the question index."""
+    questions = session.get("questions", [])
+    index = session.get("current_number", 0)
+
+    if index >= len(questions):
+        session.pop("current_question", None)
+        return None
+
+    question_id = questions[index]
+    session["current_question"] = question_id
+
+    return question_id
+
+
+def _record_answer(
+    entry_id: int,
+    is_correct: bool,
+    mode: str,
+) -> None:
+    """Record one answer, update progress, and advance the session."""
+    record_attempt(
+        entry_id=entry_id,
+        is_correct=is_correct,
+        mode=mode,
+        weight=DB_WEIGHTS[session["type"]],
+    )
+
+    session.setdefault("results", []).append(is_correct)
+
+    if not is_correct:
+        wrong_questions = session.setdefault("wrong_questions", [])
+
+        if entry_id not in wrong_questions:
+            wrong_questions.append(entry_id)
+
+    session["current_number"] = session.get("current_number", 0) + 1
+    session.pop("current_question", None)
+    session.pop("current_choices", None)
+    session.pop("correct_answer", None)
+    session.pop("current_term", None)
+
+    session["last_feedback"] = "Correct!" if is_correct else "Incorrect."
+
+
+def _get_current_entry():
+    """Return the current vocabulary entry, or None when the study is complete."""
+    question_id = _prepare_current_question()
+
+    if question_id is None:
+        return None
+
+    entry = get_entry(question_id)
+
+    if entry is None:
+        raise RuntimeError(f"Vocabulary entry {question_id} no longer exists.")
+
+    return entry
+
+
+@app.route("/study/flashcard", methods=["GET", "POST"])
 def study_flashcard():
-    app.logger.debug("study_flashcard")
-    prepare_current_question()
-    question_id = session.get('current_question', None)
-    if question_id is not None:
-        app.logger.debug(f"line 102, Current question: {question_id}")
-        question = contents.loc[question_id]
-        return render_template(
-            'flashcard.html',
-            question_id=question_id,
-            term=question['Term'],
-            definition=question['Definition']
-        )
-    session['results'] = [True]*len(session['questions'])
-    return redirect(url_for('results'))
+    """Display a flashcard and record the learner's self-assessment."""
+    if request.method == "POST":
+        question_id = session.get("current_question")
 
-@app.route('/study/multiple_choice', methods=['GET', 'POST'])
+        if question_id is None:
+            return redirect(url_for("study_flashcard"))
+
+        correct_value = request.form.get("correct", "1").casefold()
+        is_correct = correct_value in {"1", "true", "yes", "correct"}
+
+        _record_answer(
+            question_id,
+            is_correct,
+            STUDY_MODE_NAMES[1],
+        )
+
+        return redirect(url_for("study_flashcard"))
+
+    entry = _get_current_entry()
+
+    if entry is None:
+        return redirect(url_for("results"))
+
+    feedback = session.pop("last_feedback", None)
+
+    return render_template(
+        "flashcard.html",
+        question_id=entry.id,
+        term=entry.term,
+        definition=entry.definition,
+        feedback=feedback,
+    )
+
+
+@app.route("/study/multiple_choice", methods=["GET", "POST"])
 def study_multiple_choice():
-    if request.method == 'POST':
-        # Process the submitted answer
-        question_id = session.get('current_question', None)
-        user_answer_index = int(request.form.get('answer'))
-        choices = session.get('current_choices', [])
-        correct_answer = session.get('correct_answer')
+    """Present a definition and ask the learner to identify its term."""
+    if request.method == "POST":
+        question_id = session.get("current_question")
+        choices = session.get("current_choices")
+        correct_answer = session.get("correct_answer")
 
-        # Check if the selected answer is correct
-        is_correct = choices[user_answer_index] == correct_answer
-        session['results'].append(is_correct)
-        # Update session counts
-        if is_correct:
-            session['correct_count'] = session.get('correct_count', 0) + 1
-            return render_template(
-                'multiple_choice.html',
-                question_id=question_id,
-                term=session['current_term'],
-                choices=session['current_choices'],
-                feedback="Correct!",
-                is_correct=True,
-                redirect=True
-            )
-        else:
-            session['incorrect_count'] = session.get('incorrect_count', 0) + 1
-            if 'wrong_questions' not in session:
-                session['wrong_questions'] = []
-            session['wrong_questions'].append(question_id)
-            return render_template(
-                'multiple_choice.html',
-                question_id=question_id,
-                term=session['current_term'],
-                choices=session['current_choices'],
-                feedback=f"Wrong! The correct answer was: {correct_answer}",
-                is_correct=False,
-                redirect=False
-            )
+        if question_id is None or choices is None or correct_answer is None:
+            return redirect(url_for("study_multiple_choice"))
 
-    # Prepare the next question for GET request
-    prepare_current_question()
-    question_id = session.get('current_question', None)
-    if question_id is not None:
-        question = contents.loc[question_id]
-        all_choices_id = random.sample(list(range(0, question_id))+list(range(question_id+1, vocab_num)), 3) + [question_id]
-        random.shuffle(all_choices_id)
-        all_choices = [contents.loc[choice, "Definition"] for choice in all_choices_id]
-        session['current_choices'] = all_choices  # Store choices for answer validation
-        session['correct_answer'] = question['Definition']
-        session['current_term'] = question['Term']
-        return render_template(
-            'multiple_choice.html',
-            question_id=question_id,
-            term=question['Term'],
-            choices=all_choices,
-            redirect=False
+        try:
+            user_index = int(request.form["answer"])
+        except (KeyError, ValueError):
+            return "Invalid answer", 400
+
+        if not 0 <= user_index < len(choices):
+            return "Answer index out of range", 400
+
+        is_correct = choices[user_index] == correct_answer
+
+        _record_answer(
+            question_id,
+            is_correct,
+            STUDY_MODE_NAMES[2],
         )
-    # Redirect to results page if no more questions
-    return redirect(url_for('results'))
 
-@app.route('/study/spelling', methods=['GET', 'POST'])
+        return redirect(url_for("study_multiple_choice"))
+
+    entry = _get_current_entry()
+
+    if entry is None:
+        return redirect(url_for("results"))
+
+    distractors = get_random_distractor_terms(entry.term, 3)
+    choices = distractors + [entry.term]
+    random.shuffle(choices)
+
+    session["current_choices"] = choices
+    session["correct_answer"] = entry.term
+    session["current_term"] = entry.definition
+
+    feedback = session.pop("last_feedback", None)
+    is_correct = feedback == "Correct!"
+
+    return render_template(
+        "multiple_choice.html",
+        question_id=entry.id,
+        term=entry.definition,
+        choices=choices,
+        feedback=feedback,
+        is_correct=is_correct,
+        correct_answer=entry.term,
+    )
+
+
+@app.route("/study/spelling", methods=["GET", "POST"])
 def study_spelling():
-    app.logger.debug("study_spelling")
-    if request.method == 'POST':
-        # Process the submitted answer
-        question_id = session.get('current_question', None)
-        user_answer = request.form.get('answer')
-        correct_answer = session.get('correct_answer')
+    """Ask the learner to spell the term matching a definition."""
+    if request.method == "POST":
+        question_id = session.get("current_question")
+        correct_answer = session.get("correct_answer")
 
-        # Check if the selected answer is correct
-        is_correct = user_answer.lower() == correct_answer.lower()
-        # update_a_word(session['user_id'], question_id, is_correct, 0.2)
-        session['results'].append(is_correct)
+        if question_id is None or correct_answer is None:
+            return redirect(url_for("study_spelling"))
 
-        # Update session counts
-        if is_correct:
-            session['correct_count'] = session.get('correct_count', 0) + 1
-        else:
-            session['incorrect_count'] = session.get('incorrect_count', 0) + 1
-            if 'wrong_questions' not in session:
-                session['wrong_questions'] = []
-            session['wrong_questions'].append(question_id)
+        answer = request.form.get("answer", "").strip().casefold()
+        is_correct = answer == correct_answer.casefold()
 
-        # Feedback and redirection
-        feedback = "Correct!" if is_correct else f"Wrong! The correct answer was: {correct_answer}"
-        return render_template('spelling.html', feedback=feedback, is_correct=is_correct, redirect=True)
-    prepare_current_question()
-    question_id = session.get('current_question', None)
-    if question_id != None:
-        question = contents.loc[question_id]
-        session['correct_answer'] = question['Term']
-        return render_template('spelling.html', definition=question['Definition'])
-    return redirect(url_for('results'))
+        _record_answer(
+            question_id,
+            is_correct,
+            STUDY_MODE_NAMES[3],
+        )
 
-@app.route('/results', methods=['GET'])
+        return redirect(url_for("study_spelling"))
+
+    entry = _get_current_entry()
+
+    if entry is None:
+        return redirect(url_for("results"))
+
+    session["correct_answer"] = entry.term
+
+    feedback = session.pop("last_feedback", None)
+    is_correct = feedback == "Correct!"
+
+    return render_template(
+        "spelling.html",
+        definition=entry.definition,
+        feedback=feedback,
+        redirect=feedback is not None,
+        is_correct=is_correct,
+    )
+
+
+@app.route("/results")
 def results():
-    update_words(session['user_id'], session['questions'], session['results'], weights[session['type']])
-    correct_count = session.get('correct_count', 0)
-    incorrect_count = session.get('incorrect_count', 0)
-    session['correct_count'] = 0
-    session['incorrect_count'] = 0
-    session['questions'] = []
-    session['results'] = []
-    app.logger.debug(f"wrong questions: {session.get('wrong_questions', [])}")
-    if session['type'] == 1:
-        return redirect(url_for('index'))
-    return render_template('results.html', correct_count=correct_count, incorrect_count=incorrect_count)
+    """Display the results of the current study session."""
+    results_list = session.get("results", [])
 
-@app.route('/retry_wrongs', methods=['GET'])
+    correct_count = sum(results_list)
+    incorrect_count = len(results_list) - correct_count
+
+    # Preserve wrong_questions so the learner can retry incorrect answers.
+    for key in (
+        "questions",
+        "results",
+        "current_number",
+        "current_question",
+        "current_choices",
+        "correct_answer",
+        "current_term",
+        "last_feedback",
+    ):
+        session.pop(key, None)
+
+    return render_template(
+        "results.html",
+        correct_count=correct_count,
+        incorrect_count=incorrect_count,
+    )
+
+
+@app.route("/retry_wrongs")
 def retry_wrongs():
-    
-    if 'wrong_questions' in session and session['wrong_questions']:
-        app.logger.debug(f"wrong questions: {session['wrong_questions']}")
-        session['questions'] = session['wrong_questions']  # Repopulate the questions list
-        session['wrong_questions'] = []  # Clear wrong questions to avoid duplication
-        session['current_number'] = 0
-        session['current_question'] = None  # Reset current question
-        app.logger.debug("Retrying wrong questions")
-        # Redirect based on the question type stored in session
-        question_type = session.get('type', 1)
-        if question_type == 1:
-            return redirect(url_for('study_flashcard'))
-        elif question_type == 2:
-            return redirect(url_for('study_multiple_choice'))
-        elif question_type == 3:
-            return redirect(url_for('study_spelling'))
-    else:
-        # If no wrong questions, redirect to the results page
-        return redirect(url_for('index'))
+    """Start a new session containing only previously incorrect entries."""
+    wrongs = session.get("wrong_questions", [])
 
-def prepare_session_questions():
-    app.logger.debug("Preparing session questions")
-    session.pop('wrong_questions', None)
-    start = session.get('start', 0)
-    end = session.get('end', vocab_num)
-    number = session.get('number', 10)
-    number = min(number, end-start)
-    order = session.get('order', 1)
-    if order == 1: # original order
-        questions = list(range(start, start+number))
-    elif order == 2: # sort by score, lowest first
-        questions = get_least_familiar_questions(session['user_id'], start, end, number)
-    elif order == 3: # sort by score and last time accessed
-        questions = get_least_familiar_and_last_accessed_questions(session['user_id'], start, end, number)
-    elif order == 4: # random order
-        questions = random.sample(range(start, end), number)
-    app.logger.debug(f"number of questions:{len(questions)}")
-    session['questions'] = questions
-    session['current_number'] = 0
-    session['results'] = []
-    session['current_question'] = None
+    if not wrongs:
+        return redirect(url_for("index"))
 
-def prepare_current_question():
-    current_number = session.get('current_number', 0)
-    questions = session.get('questions', [])
-    if current_number < len(questions):
-        current_question = questions[current_number]
-        session['current_question'] = current_question
-        current_number += 1
-        session['current_number'] = current_number
-    else:
-        session['current_question'] = None
+    study_type = session.get("type")
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=20250)
+    if study_type not in STUDY_ROUTES:
+        return redirect(url_for("index"))
+
+    session["questions"] = wrongs.copy()
+    session["wrong_questions"] = []
+    session["results"] = []
+    session["current_number"] = 0
+
+    for key in (
+        "current_question",
+        "current_choices",
+        "correct_answer",
+        "current_term",
+        "last_feedback",
+    ):
+        session.pop(key, None)
+
+    return redirect(url_for(STUDY_ROUTES[study_type]))
+
+
+if __name__ == "__main__":
+    app.run(
+        debug=True,
+        host="0.0.0.0",
+        port=20250,
+    )

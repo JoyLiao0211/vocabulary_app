@@ -31,5 +31,16 @@
         </form>
         {% endif %}
     </div>
+
+    <script>
+        document.addEventListener('keydown', function (event) {
+            const nextButton = document.querySelector('#feedback button');
+
+            if (event.key === ' ' && nextButton) {
+                event.preventDefault();
+                nextButton.click();
+            }
+        });
+    </script>
 </body>
 </html>
