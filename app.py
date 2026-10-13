@@ -227,6 +227,7 @@ def study_flashcard():
 
     return render_template(
         "flashcard.html",
+        question_id=entry.id,
         term=entry.term,
         definition=entry.definition,
         feedback=feedback,
@@ -276,12 +277,16 @@ def study_multiple_choice():
     session["current_term"] = entry.definition
 
     feedback = session.pop("last_feedback", None)
+    is_correct = feedback == "Correct!"
 
     return render_template(
         "multiple_choice.html",
+        question_id=entry.id,
         term=entry.definition,
         choices=choices,
         feedback=feedback,
+        is_correct=is_correct,
+        correct_answer=entry.term,
     )
 
 
@@ -314,11 +319,14 @@ def study_spelling():
     session["correct_answer"] = entry.term
 
     feedback = session.pop("last_feedback", None)
+    is_correct = feedback == "Correct!"
 
     return render_template(
         "spelling.html",
         definition=entry.definition,
         feedback=feedback,
+        redirect=feedback is not None,
+        is_correct=is_correct,
     )
 
 
