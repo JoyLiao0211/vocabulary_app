@@ -174,11 +174,6 @@ def _record_answer(
         if entry_id not in wrong_questions:
             wrong_questions.append(entry_id)
 
-    session["last_question_id"] = entry_id
-    session["last_question_choices"] = session.get("current_choices")
-    session["last_question_correct_answer"] = session.get("correct_answer")
-    session["last_question_term"] = session.get("current_term")
-
     session["current_number"] = session.get("current_number", 0) + 1
     session.pop("current_question", None)
     session.pop("current_choices", None)
@@ -243,17 +238,22 @@ def study_flashcard():
 def study_multiple_choice():
     """Present a definition and ask the learner to identify its term."""
     if request.method == "POST":
-        question_id = session.get("current_question")
-        choices = session.get("current_choices")
-        correct_answer = session.get("correct_answer")
-
-        if question_id is None or choices is None or correct_answer is None:
-            return redirect(url_for("study_multiple_choice"))
-
         try:
+            question_id = int(request.form["question_id"])
             user_index = int(request.form["answer"])
+            correct_answer = request.form["correct_answer"]
         except (KeyError, ValueError):
             return "Invalid answer", 400
+
+        entry = get_entry(question_id)
+        if entry is None:
+            return redirect(url_for("study_multiple_choice"))
+
+        choices = session.get("current_choices")
+        if choices is None:
+            distractors = get_random_distractor_terms(entry.term, 3)
+            choices = distractors + [entry.term]
+            random.shuffle(choices)
 
         if not 0 <= user_index < len(choices):
             return "Answer index out of range", 400
@@ -266,27 +266,15 @@ def study_multiple_choice():
             STUDY_MODE_NAMES[2],
         )
 
-        return redirect(url_for("study_multiple_choice"))
-
-    feedback = session.pop("last_feedback", None)
-    previous_question_id = session.pop("last_question_id", None)
-    previous_choices = session.pop("last_question_choices", None)
-    previous_correct_answer = session.pop("last_question_correct_answer", None)
-    previous_term = session.pop("last_question_term", None)
-
-    if feedback is not None and previous_question_id is not None:
-        previous_entry = get_entry(previous_question_id)
-
-        if previous_entry is not None:
-            return render_template(
-                "multiple_choice.html",
-                question_id=previous_entry.id,
-                term=previous_term or previous_entry.definition,
-                choices=previous_choices or [previous_entry.term],
-                feedback=feedback,
-                is_correct=feedback == "Correct!",
-                correct_answer=previous_correct_answer or previous_entry.term,
-            )
+        return render_template(
+            "multiple_choice.html",
+            question_id=entry.id,
+            term=entry.definition,
+            choices=choices,
+            feedback="Correct!" if is_correct else "Incorrect!",
+            is_correct=is_correct,
+            correct_answer=correct_answer,
+        )
 
     entry = _get_current_entry()
 
@@ -301,6 +289,7 @@ def study_multiple_choice():
     session["correct_answer"] = entry.term
     session["current_term"] = entry.definition
 
+    feedback = session.pop("last_feedback", None)
     is_correct = feedback == "Correct!" if feedback is not None else False
 
     return render_template(
@@ -318,10 +307,14 @@ def study_multiple_choice():
 def study_spelling():
     """Ask the learner to spell the term matching a definition."""
     if request.method == "POST":
-        question_id = session.get("current_question")
-        correct_answer = session.get("correct_answer")
+        try:
+            question_id = int(request.form["question_id"])
+            correct_answer = request.form["correct_answer"]
+        except (KeyError, ValueError):
+            return "Invalid answer", 400
 
-        if question_id is None or correct_answer is None:
+        entry = get_entry(question_id)
+        if entry is None:
             return redirect(url_for("study_spelling"))
 
         answer = request.form.get("answer", "").strip().casefold()
@@ -333,24 +326,15 @@ def study_spelling():
             STUDY_MODE_NAMES[3],
         )
 
-        return redirect(url_for("study_spelling"))
-
-    feedback = session.pop("last_feedback", None)
-    previous_question_id = session.pop("last_question_id", None)
-    previous_correct_answer = session.pop("last_question_correct_answer", None)
-    previous_term = session.pop("last_question_term", None)
-
-    if feedback is not None and previous_question_id is not None:
-        previous_entry = get_entry(previous_question_id)
-
-        if previous_entry is not None:
-            return render_template(
-                "spelling.html",
-                definition=previous_term or previous_entry.definition,
-                feedback=feedback,
-                redirect=True,
-                is_correct=feedback == "Correct!",
-            )
+        return render_template(
+            "spelling.html",
+            question_id=entry.id,
+            correct_answer=correct_answer,
+            definition=entry.definition,
+            feedback="Correct!" if is_correct else "Incorrect!",
+            redirect=True,
+            is_correct=is_correct,
+        )
 
     entry = _get_current_entry()
 
@@ -359,10 +343,13 @@ def study_spelling():
 
     session["correct_answer"] = entry.term
 
+    feedback = session.pop("last_feedback", None)
     is_correct = feedback == "Correct!" if feedback is not None else False
 
     return render_template(
         "spelling.html",
+        question_id=entry.id,
+        correct_answer=entry.term,
         definition=entry.definition,
         feedback=feedback,
         redirect=feedback is not None,

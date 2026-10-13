@@ -26,6 +26,8 @@
         {% else %}
         <p>Definition: <strong>{{ definition }}</strong></p>
         <form method="POST">
+            <input type="hidden" name="question_id" value="{{ question_id }}">
+            <input type="hidden" name="correct_answer" value="{{ correct_answer }}">
             <input type="text" class="form-control" name="answer" placeholder="Enter your spelling" required>
             <button type="submit" class="btn btn-primary mt-2">Submit Answer</button>
         </form>

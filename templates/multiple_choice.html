@@ -58,6 +58,9 @@
         </div>
 
         <form method="POST" action="{{ url_for('study_multiple_choice') }}">
+            <input type="hidden" name="question_id" value="{{ question_id }}">
+            <input type="hidden" name="correct_answer" value="{{ correct_answer }}">
+
             <div id="choices-container"
                  class="d-flex flex-column align-items-center">
 
