@@ -80,6 +80,11 @@
 
             {% if is_correct %}
                 <p class="feedback-correct">✓ Correct!</p>
+                <script>
+                    setTimeout(function () {
+                        window.location.href = "{{ url_for('study_multiple_choice') }}";
+                    }, 700);
+                </script>
             {% else %}
                 <p class="feedback-incorrect">✗ Incorrect!</p>
 
